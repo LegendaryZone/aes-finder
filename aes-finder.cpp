@@ -24,6 +24,7 @@ static uint32_t _rotr(uint32_t x, int n)
 
 #if defined(WIN32)
 #include "os_windows.h"
+#pragma warning (disable : 4996)
 #elif defined(__linux__)
 #include "os_linux.h"
 #elif defined(__APPLE__)
@@ -902,6 +903,7 @@ static int aes_detect_dec(const uint32_t* ctx, uint8_t* key)
 }
 
 #include "aes-finder-test.h"
+#include "aes-finder.h"
 
 static void find_keys(uint32_t pid)
 {
@@ -961,44 +963,9 @@ static void find_keys(uint32_t pid)
         avail += read;
 
         uint32_t offset = 0;
-        if (avail >= 60*sizeof(uint32_t))
-        {
-            while (offset <= avail - 60*sizeof(uint32_t))
-            {
-                uint8_t key[32];
-                if (int len = aes_detect_enc((const uint32_t*)&buffer[offset], key))
-                {
-                    printf("[%p] Found AES-%d encryption key: ", (void*)addr, len * 8);
-                    for (int i = 0; i < len; i++)
-                    {
-                        printf("%02x", key[i]);
-                    }
-                    printf("\n");
-
-                    offset += 28 + len;
-                    addr += 28 + len;
-                }
-                else if (int len = aes_detect_dec((const uint32_t*)&buffer[offset], key))
-                {
-                    printf("[%p] Found AES-%d decryption key: ", (void*)addr, len * 8);
-                    for (int i = 0; i < len; i++)
-                    {
-                        printf("%02x", key[i]);
-                    }
-                    printf("\n");
-
-                    offset += 28 + len;
-                    addr += 28 + len;
-                }
-                else
-                {
-                    offset += 4;
-                    addr += 4;
-                }
-            }
-
-            avail -= offset;
-        }
+		//printf("Avail %d, offse %d, addr %d\n", avail, offset, addr);
+		process_buffer(avail, offset, buffer, addr);
+		//printf("Avail %d, offse %d, addr %d\n", avail, offset, addr);
 
         memmove(buffer, buffer + offset, avail);
     }
@@ -1011,11 +978,114 @@ static void find_keys(uint32_t pid)
     os_process_end();
 }
 
+static void find_keys_file(const char* file_name)
+{
+	printf("Processing file %s...\n", file_name);
+
+	FILE* f = fopen(file_name, "rb");
+	if (!f)
+	{
+		printf("Failed to open file\n");
+		return;
+	}
+
+	uint8_t buffer[64 * 1024];
+	uint32_t avail = 0;
+
+	uint64_t size = 0;
+
+	uint64_t addr = 0;
+
+	clock_t t0 = clock();
+	uint64_t total = 0;
+
+	fseek(f, 0, SEEK_END); // seek to end of file
+	size = ftell(f); // get current file pointer
+	fseek(f, 0, SEEK_SET); // seek back to beginning of file
+	printf("File size %d bytes\n", size);
+
+	for (;;)
+	{
+		if (size == 0)
+		{
+			break;
+		}
+
+		uint32_t read = sizeof(buffer) - avail;
+		if (read > size) read = (uint32_t)size;
+
+		read = (uint32_t)fread(buffer + avail, 1, read, f);
+		//printf("Read %d bytes\n", read);
+
+		size -= read;
+
+		total += read;
+		avail += read;
+
+		uint32_t offset = 0;
+		//printf("Avail %d, offse %d, addr %d\n", avail, offset, addr);
+		process_buffer(avail, offset, buffer, addr);
+		//printf("Avail %d, offse %d, addr %d\n", avail, offset, addr);
+
+		memmove(buffer, buffer + offset, avail);
+	}
+
+	fclose(f);
+
+	clock_t t1 = clock();
+	double time = double(t1 - t0) / CLOCKS_PER_SEC;
+	const double MB = 1024.0 * 1024.0;
+	printf("Processed %.2f bytes, speed = %.2f MB/s\n", (double)total, total / MB / time);
+}
+
+
+void process_buffer(uint32_t &avail, uint32_t &offset, uint8_t  buffer[65536], uint64_t &addr)
+{
+	if (avail >= 60 * sizeof(uint32_t))
+	{
+		while (offset <= avail - 60 * sizeof(uint32_t))
+		{
+			uint8_t key[32];
+			if (int len = aes_detect_enc((const uint32_t*)&buffer[offset], key))
+			{
+				printf("[%p] Found AES-%d encryption key: ", (void*)addr, len * 8);
+				for (int i = 0; i < len; i++)
+				{
+					printf("%02x", key[i]);
+				}
+				printf("\n");
+
+				offset += 28 + len;
+				addr += 28 + len;
+			}
+			else if (int len = aes_detect_dec((const uint32_t*)&buffer[offset], key))
+			{
+				printf("[%p] Found AES-%d decryption key: ", (void*)addr, len * 8);
+				for (int i = 0; i < len; i++)
+				{
+					printf("%02x", key[i]);
+				}
+				printf("\n");
+
+				offset += 28 + len;
+				addr += 28 + len;
+			}
+			else
+			{
+				offset += 1;
+				addr += 1;
+			}
+		}
+
+		avail -= offset;
+	}
+}
+
 int main(int argc, char* argv[])
 {
     if (argc != 2)
     {
-        printf("Usage: aes-finder -pid | process-name\n");
+        printf("Usage: aes-finder -pid | process-name | -f<memory dump file>\n");
         return EXIT_FAILURE;
     }
 
@@ -1024,8 +1094,15 @@ int main(int argc, char* argv[])
 
     if (argv[1][0] == '-')
     {
-        uint32_t pid = atoi(argv[1] + 1);
-        find_keys(pid);
+		if (argv[1][1] == 'f')
+		{
+			find_keys_file(&argv[1][2]);
+		}
+		else
+		{
+			uint32_t pid = atoi(argv[1] + 1);
+			find_keys(pid);
+		}
     }
     else
     {

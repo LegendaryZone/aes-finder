@@ -160,6 +160,7 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\aes-finder-test.h" />
+    <ClInclude Include="..\aes-finder.h" />
     <ClInclude Include="..\os_linux.h" />
     <ClInclude Include="..\os_osx.h" />
     <ClInclude Include="..\os_windows.h" />
